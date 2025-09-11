@@ -1,103 +1,156 @@
-import Image from "next/image";
+"use client";
+import { useState, useEffect } from 'react';
+import apiClient from './lib/apiClient';
+import { debounce } from 'lodash';
 
-export default function Home() {
+interface Company {
+  id: number;
+  name: string;
+  ticker_symbol: string;
+}
+
+interface AnalysisResult {
+  final_recommendation: string;
+  recommendation_summary: string;
+  pros: string[];
+  cons: string[];
+}
+
+export default function HomePage() {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState<Company | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [analysisId, setAnalysisId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const debouncedSearch = debounce(async (query: string) => {
+    if (query.length > 2) {
+      try {
+        const response = await apiClient.get(`/api/data/search-companies?query=${query}`);
+        setCompanies(response.data);
+      } catch (err) {
+        console.error("Failed to search companies", err);
+      }
+    } else {
+      setCompanies([]);
+    }
+  }, 500);
+
+  useEffect(() => {
+    debouncedSearch(searchTerm);
+    return () => {
+      debouncedSearch.cancel();
+    };
+  }, [searchTerm]);
+
+  const handleAnalyze = async () => {
+    if (!selectedCompany) return;
+    setIsLoading(true);
+    setError(null);
+    setAnalysisResult(null);
+
+    try {
+      const startRes = await apiClient.post(`/api/analysis/start-analysis?ticker=${selectedCompany.ticker_symbol}`);
+      setAnalysisId(startRes.data.analysis_id);
+    } catch (err) {
+      setError("Failed to start analysis.");
+      setIsLoading(false);
+    }
+  };
+  
+  useEffect(() => {
+    if (!analysisId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const statusRes = await apiClient.get(`/api/analysis/analysis-status/${analysisId}`);
+        if (statusRes.data.status === 'completed') {
+          setAnalysisResult(statusRes.data.result);
+          setIsLoading(false);
+          clearInterval(interval);
+        } else if (statusRes.data.status === 'failed') {
+          setError('Analysis failed.');
+          setIsLoading(false);
+          clearInterval(interval);
+        }
+      } catch (err) {
+        setError('Could not fetch analysis status.');
+        setIsLoading(false);
+        clearInterval(interval);
+      }
+    }, 5000); // Poll every 5 seconds
+
+    return () => clearInterval(interval);
+  }, [analysisId]);
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <div className="container mx-auto px-4 py-8">
+      <header className="text-center mb-12">
+        <h1 className="text-5xl font-bold text-cyan-400">AI Investment Advisor</h1>
+      </header>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+      <div className="max-w-2xl mx-auto bg-gray-800 p-8 rounded-xl shadow-lg">
+        <div className="relative">
+          <input
+            type="text"
+            placeholder="Search for a company (e.g., AAPL)"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full bg-gray-700 p-3 rounded-lg focus:ring-2 focus:ring-cyan-500"
+          />
+          {companies.length > 0 && (
+            <ul className="absolute z-10 w-full bg-gray-700 mt-1 rounded-lg">
+              {companies.map((c) => (
+                <li
+                  key={c.id}
+                  onClick={() => {
+                    setSelectedCompany(c);
+                    setSearchTerm(c.name);
+                    setCompanies([]);
+                  }}
+                  className="p-3 hover:bg-gray-600 cursor-pointer"
+                >
+                  {c.name} ({c.ticker_symbol})
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          onClick={handleAnalyze}
+          disabled={!selectedCompany || isLoading}
+          className="w-full mt-4 bg-cyan-600 hover:bg-cyan-700 font-bold py-3 rounded-lg disabled:bg-gray-500"
         >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+          {isLoading ? 'Analyzing...' : 'Analyze for Investment'}
+        </button>
+        {error && <p className="text-red-400 text-center mt-4">{error}</p>}
+      </div>
+
+      {analysisResult && (
+        <div className="mt-12 max-w-4xl mx-auto bg-gray-800 p-8 rounded-xl">
+          <h2 className="text-3xl font-bold text-center mb-6">Analysis for: {selectedCompany?.name}</h2>
+          <div className={`text-center p-4 rounded-lg mb-6 ${analysisResult.final_recommendation === 'Invest' ? 'bg-green-900' : 'bg-red-900'}`}>
+            <h3 className="text-2xl font-bold">{analysisResult.final_recommendation}</h3>
+            <p className="mt-1">{analysisResult.recommendation_summary}</p>
+          </div>
+          <div className="grid md:grid-cols-2 gap-8">
+            <div>
+              <h4 className="text-xl font-semibold mb-3 text-green-400">Pros</h4>
+              <ul className="list-disc list-inside space-y-2">
+                {analysisResult.pros.map((pro: string, i) => <li key={i}>{pro}</li>)}
+              </ul>
+            </div>
+            <div>
+              <h4 className="text-xl font-semibold mb-3 text-red-400">Cons</h4>
+              <ul className="list-disc list-inside space-y-2">
+                {analysisResult.cons.map((con: string, i) => <li key={i}>{con}</li>)}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
